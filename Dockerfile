@@ -10,7 +10,7 @@ COPY server/package.json ./
 RUN npm ci --production 2>/dev/null || npm install --production
 
 # Install meshcore-packet-capture
-RUN git clone --depth 1 https://github.com/agessaman/meshcore-packet-capture.git /opt/packet-capture && \
+RUN git clone --depth 1 --branch v0.3 https://github.com/agessaman/meshcore-packet-capture.git /opt/packet-capture && \
     pip3 install --no-cache-dir --break-system-packages -r /opt/packet-capture/requirements.txt
 
 # Copy server source
