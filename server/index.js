@@ -6,7 +6,6 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const { SerialPort } = require('serialport');
 const { FrameParser, CommandCodes, ResponseCodes, FRAME_INCOMING, FRAME_OUTGOING, FRAME_HEADER_LEN } = require('./frame-parser.js');
-const { MQTTPublisher } = require('./mqtt-publisher.js');
 
 // Load .env.local (check both __dirname and parent for native dev vs Docker)
 const fs = require('fs');
@@ -29,17 +28,6 @@ const HTTP_PORT = parseInt(process.env.HTTP_PORT, 10) || 8080;
 const WS_PORT = parseInt(process.env.WS_PORT, 10) || 3000;
 const TCP_PORT = parseInt(process.env.TCP_PORT, 10) || 5000;
 
-const mqttConfig = {
-  enabled: (process.env.MQTT_ENABLED || 'true').toLowerCase() === 'true',
-  server: process.env.MQTT_SERVER || 'mqtt-us-v1.letsmesh.net',
-  port: parseInt(process.env.MQTT_PORT, 10) || 443,
-  transport: process.env.MQTT_TRANSPORT || 'websockets',
-  useTls: (process.env.MQTT_USE_TLS || 'true').toLowerCase() === 'true',
-  iata: process.env.IATA || 'XXX',
-  owner: process.env.PACKETCAPTURE_OWNER_PUBLIC_KEY || '',
-  email: process.env.PACKETCAPTURE_OWNER_EMAIL || '',
-};
-
 // ---------------------------------------------------------------------------
 // Logger
 // ---------------------------------------------------------------------------
@@ -57,13 +45,10 @@ const log = {
 // ---------------------------------------------------------------------------
 let serial = null;
 const frameParser = new FrameParser();
-const mqttPublisher = new MQTTPublisher(mqttConfig, log);
 let wsClients = new Set();
 let tcpClients = new Set();
 
 // Device info retrieved at startup
-let devicePublicKey = null;
-let devicePrivateKey = null;
 let deviceName = null;
 let startupComplete = false;
 
@@ -207,33 +192,7 @@ async function startDeviceQuery() {
     log.error(`[STARTUP] Failed to get self info: ${err.message}`);
   }
 
-  // Step 2: Export private key
-  try {
-    const privKeyPayload = await sendCommandAndWait(
-      Buffer.from([CommandCodes.ExportPrivateKey]),
-      ResponseCodes.PrivateKey,
-      5000
-    );
-    if (privKeyPayload) {
-      devicePrivateKey = FrameParser.parsePrivateKey(privKeyPayload);
-      if (devicePrivateKey) {
-        log.info(`[STARTUP] Private key retrieved (${devicePrivateKey.substring(0, 8)}...)`);
-      }
-    }
-  } catch (err) {
-    log.warn(`[STARTUP] Failed to export private key: ${err.message}`);
-  }
-
   startupComplete = true;
-
-  // Start MQTT if we have keys
-  if (devicePublicKey && devicePrivateKey && mqttConfig.enabled) {
-    mqttPublisher.start(devicePublicKey, devicePrivateKey).catch((err) => {
-      log.error(`[MQTT] Failed to start: ${err.message}`);
-    });
-  } else if (mqttConfig.enabled) {
-    log.warn('[MQTT] Cannot start - missing device keys');
-  }
 
   // Drain any commands that were queued while startup was in progress
   log.info(`[STARTUP] Complete — draining ${commandQueue.length} queued client commands`);
@@ -292,13 +251,7 @@ function handleIncomingFrame(frame) {
   if (isPush) {
     // Push notifications: broadcast to ALL clients
     broadcastToAll(rawFrame);
-
-    // Publish to MQTT
-    const pushData = FrameParser.parsePushNotification(payload);
-    if (pushData) {
-      log.debug(`[PUSH] ${pushData.type}`, pushData);
-      mqttPublisher.publishPacket(pushData);
-    }
+    log.debug(`[PUSH] code=0x${responseCode.toString(16)}`);
   } else {
     // Command response: send only to the client that sent the command
     if (currentCommand && currentCommand.source) {
@@ -505,7 +458,6 @@ function sleep(ms) {
 // ---------------------------------------------------------------------------
 function shutdown() {
   log.info('Shutting down...');
-  mqttPublisher.stop();
   if (serial && serial.isOpen) {
     serial.close();
   }
@@ -523,8 +475,6 @@ log.info(`Serial: ${SERIAL_PORT} @ ${SERIAL_BAUD}`);
 log.info(`HTTP:   :${HTTP_PORT}`);
 log.info(`WS:     :${WS_PORT}`);
 log.info(`TCP:    :${TCP_PORT}`);
-log.info(`MQTT:   ${mqttConfig.enabled ? `${mqttConfig.server}:${mqttConfig.port}` : 'disabled'}`);
-log.info(`IATA:   ${mqttConfig.iata}`);
 
 startHTTPServer();
 startWebSocketServer();
