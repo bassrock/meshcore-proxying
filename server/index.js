@@ -378,18 +378,25 @@ function startWebSocketServer() {
     log.info(`[WS] Client connected from ${addr}`);
 
     ws._isWebSocket = true; // Tag for sendToClient
+    ws._replayDone = false;
     wsClients.add(ws);
-
-    // Replay buffered push notifications to the new client
-    if (pushBuffer.length > 0) {
-      log.info(`[WS] Replaying ${pushBuffer.length} buffered push notifications`);
-      for (const entry of pushBuffer) {
-        if (ws.readyState === 1) ws.send(entry.frame);
-      }
-    }
 
     ws.on('message', (data) => {
       enqueueCommand(Buffer.from(data), ws);
+
+      // Replay push buffer after the client's first command — the app needs
+      // time to initialize (AppStart → SelfInfo, load contacts, etc.) before
+      // it can process historical push notifications.
+      if (!ws._replayDone && pushBuffer.length > 0) {
+        ws._replayDone = true;
+        setTimeout(() => {
+          if (ws.readyState !== 1) return;
+          log.info(`[WS] Replaying ${pushBuffer.length} buffered push notifications`);
+          for (const entry of pushBuffer) {
+            if (ws.readyState === 1) ws.send(entry.frame);
+          }
+        }, 3000);
+      }
     });
 
     ws.on('close', () => {
