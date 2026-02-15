@@ -1,15 +1,26 @@
 FROM node:20-alpine
 
+# Install Python for meshcore-packet-capture
+RUN apk add --no-cache python3 py3-pip git
+
 WORKDIR /app
 
-# Copy server package.json and install dependencies
+# Copy server package.json and install Node dependencies
 COPY server/package.json ./
 RUN npm ci --production 2>/dev/null || npm install --production
+
+# Install meshcore-packet-capture
+RUN git clone --depth 1 https://github.com/agessaman/meshcore-packet-capture.git /opt/packet-capture && \
+    pip3 install --no-cache-dir --break-system-packages -r /opt/packet-capture/requirements.txt
 
 # Copy server source
 COPY server/ ./
 
-# Default packet capture configuration (meshcore-packet-capture)
+# Copy startup script
+COPY start.sh ./
+RUN chmod +x start.sh
+
+# Default packet capture configuration
 ENV PACKETCAPTURE_CONNECTION_TYPE=tcp
 ENV PACKETCAPTURE_TCP_HOST=localhost
 ENV PACKETCAPTURE_TCP_PORT=5000
@@ -40,4 +51,4 @@ ENV PACKETCAPTURE_UPDATE_BRANCH=main
 
 EXPOSE 8080 3000 5000
 
-CMD ["node", "index.js"]
+CMD ["./start.sh"]
