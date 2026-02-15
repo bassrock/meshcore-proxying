@@ -29,6 +29,7 @@ const HTTP_PORT = parseInt(process.env.HTTP_PORT, 10) || 8080;
 const WS_PORT = parseInt(process.env.WS_PORT, 10) || 3000;
 const TCP_PORT = parseInt(process.env.TCP_PORT, 10) || 5000;
 const PUSH_BUFFER_SIZE = parseInt(process.env.PUSH_BUFFER_SIZE, 10) || 1000;
+const COMMAND_TIMEOUT_MS = parseInt(process.env.COMMAND_TIMEOUT_MS, 10) || 30000;
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -62,6 +63,7 @@ function bufferPushNotification(rawFrame) {
 
 // Device info retrieved at startup
 let deviceName = null;
+let devicePublicKey = null;
 let startupComplete = false;
 
 // Pending startup responses
@@ -93,7 +95,7 @@ function drainQueue() {
     log.debug('[QUEUE] Command timed out, moving on');
     currentCommand = null;
     drainQueue();
-  }, 5000);
+  }, COMMAND_TIMEOUT_MS);
 
   serial.write(currentCommand.data);
 }
@@ -503,6 +505,7 @@ log.info(`HTTP:   :${HTTP_PORT}`);
 log.info(`WS:     :${WS_PORT}`);
 log.info(`TCP:    :${TCP_PORT}`);
 log.info(`Push buffer: ${PUSH_BUFFER_SIZE} entries`);
+log.info(`Cmd timeout: ${COMMAND_TIMEOUT_MS}ms`);
 
 startHTTPServer();
 startWebSocketServer();
