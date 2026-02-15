@@ -5,8 +5,9 @@ const express = require('express');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const { SerialPort } = require('serialport');
-const { FrameParser, CommandCodes, ResponseCodes, FRAME_INCOMING, FRAME_OUTGOING, FRAME_HEADER_LEN } = require('./frame-parser.js');
+const { FrameParser, CommandCodes, ResponseCodes, PushCodes, FRAME_INCOMING, FRAME_OUTGOING, FRAME_HEADER_LEN } = require('./frame-parser.js');
 const weather = require('./weather.js');
+const webpush = require('web-push');
 
 // Load .env.local (check both __dirname and parent for native dev vs Docker)
 const fs = require('fs');
@@ -30,6 +31,29 @@ const WS_PORT = parseInt(process.env.WS_PORT, 10) || 3000;
 const TCP_PORT = parseInt(process.env.TCP_PORT, 10) || 5000;
 const PUSH_BUFFER_SIZE = parseInt(process.env.PUSH_BUFFER_SIZE, 10) || 1000;
 const COMMAND_TIMEOUT_MS = parseInt(process.env.COMMAND_TIMEOUT_MS, 10) || 30000;
+
+// ---------------------------------------------------------------------------
+// VAPID keys for Web Push
+// ---------------------------------------------------------------------------
+const VAPID_KEYS_PATH = path.resolve(__dirname, '.vapid-keys.json');
+let vapidKeys;
+if (fs.existsSync(VAPID_KEYS_PATH)) {
+  vapidKeys = JSON.parse(fs.readFileSync(VAPID_KEYS_PATH, 'utf8'));
+} else {
+  vapidKeys = webpush.generateVAPIDKeys();
+  fs.writeFileSync(VAPID_KEYS_PATH, JSON.stringify(vapidKeys, null, 2));
+}
+webpush.setVapidDetails(
+  'mailto:meshcore@localhost',
+  vapidKeys.publicKey,
+  vapidKeys.privateKey
+);
+
+// Web Push subscriptions (in-memory, keyed by endpoint)
+const pushSubscriptions = new Map();
+
+// Push notification types worth notifying about
+const NOTIFY_PUSH_CODES = new Set([PushCodes.MsgWaiting, PushCodes.RawData]);
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -270,6 +294,11 @@ function handleIncomingFrame(frame) {
     bufferPushNotification(rawFrame);
     broadcastToAll(rawFrame);
     log.debug(`[PUSH] code=0x${responseCode.toString(16)} (buffer: ${pushBuffer.length}/${PUSH_BUFFER_SIZE})`);
+
+    // Send Web Push notification for interesting types
+    if (NOTIFY_PUSH_CODES.has(responseCode) && pushSubscriptions.size > 0) {
+      sendWebPush(payload);
+    }
   } else {
     // Command response: send only to the client that sent the command
     if (currentCommand && currentCommand.source) {
@@ -297,6 +326,40 @@ function sendToClient(source, rawFrame) {
     if (source.readyState === 1) source.send(rawFrame);
   } else {
     if (!source.destroyed) source.write(rawFrame);
+  }
+}
+
+function sendWebPush(payload) {
+  const parsed = FrameParser.parsePushNotification(payload);
+  if (!parsed) return;
+
+  const pushPayload = JSON.stringify({
+    title: 'MeshCore',
+    body: formatPushBody(parsed),
+    data: { type: parsed.type },
+  });
+
+  for (const [endpoint, sub] of pushSubscriptions) {
+    webpush.sendNotification(sub, pushPayload).catch((err) => {
+      if (err.statusCode === 410 || err.statusCode === 404) {
+        // Subscription expired or invalid — remove it
+        pushSubscriptions.delete(endpoint);
+        log.info(`[PUSH] Removed expired subscription (${pushSubscriptions.size} remaining)`);
+      } else {
+        log.error(`[PUSH] Web Push error: ${err.message}`);
+      }
+    });
+  }
+}
+
+function formatPushBody(parsed) {
+  switch (parsed.type) {
+    case 'msg_waiting':
+      return 'New message waiting';
+    case 'raw_data':
+      return `Raw data received (SNR: ${parsed.snr}, RSSI: ${parsed.rssi})`;
+    default:
+      return `Mesh event: ${parsed.type}`;
   }
 }
 
@@ -404,6 +467,7 @@ const https = require('https');
 
 const UPSTREAM = 'https://app.meshcore.nz';
 const POLYFILL_PATH = path.resolve(__dirname, 'webserial-polyfill.js');
+const PUSH_WORKER_PATH = path.resolve(__dirname, 'push-worker.js');
 
 function startHTTPServer() {
   const app = express();
@@ -412,6 +476,36 @@ function startHTTPServer() {
   app.get('/__polyfill.js', (_req, res) => {
     res.type('application/javascript');
     res.sendFile(POLYFILL_PATH);
+  });
+
+  // Serve the push service worker (must be at root scope for SW scope rules)
+  app.get('/__push-worker.js', (_req, res) => {
+    res.type('application/javascript');
+    res.sendFile(PUSH_WORKER_PATH);
+  });
+
+  // Push notification API routes
+  app.get('/__push/vapid-key', (_req, res) => {
+    res.json({ publicKey: vapidKeys.publicKey });
+  });
+
+  app.post('/__push/subscribe', express.json(), (req, res) => {
+    const sub = req.body;
+    if (!sub || !sub.endpoint) {
+      return res.status(400).json({ error: 'Invalid subscription' });
+    }
+    pushSubscriptions.set(sub.endpoint, sub);
+    log.info(`[PUSH] Subscription added (${pushSubscriptions.size} total)`);
+    res.json({ ok: true });
+  });
+
+  app.post('/__push/unsubscribe', express.json(), (req, res) => {
+    const sub = req.body;
+    if (sub && sub.endpoint) {
+      pushSubscriptions.delete(sub.endpoint);
+      log.info(`[PUSH] Subscription removed (${pushSubscriptions.size} total)`);
+    }
+    res.json({ ok: true });
   });
 
   // Proxy everything else to app.meshcore.nz, injecting polyfill into HTML
@@ -506,6 +600,7 @@ log.info(`WS:     :${WS_PORT}`);
 log.info(`TCP:    :${TCP_PORT}`);
 log.info(`Push buffer: ${PUSH_BUFFER_SIZE} entries`);
 log.info(`Cmd timeout: ${COMMAND_TIMEOUT_MS}ms`);
+log.info(`VAPID public key: ${vapidKeys.publicKey}`);
 
 startHTTPServer();
 startWebSocketServer();
