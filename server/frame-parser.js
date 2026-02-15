@@ -45,6 +45,7 @@ const ResponseCodes = {
 // Command codes
 const CommandCodes = {
   AppStart: 1,
+  SendChannelTxtMsg: 3,
   DeviceQuery: 22,
   ExportPrivateKey: 23,
 };

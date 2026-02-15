@@ -6,6 +6,7 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const { SerialPort } = require('serialport');
 const { FrameParser, CommandCodes, ResponseCodes, FRAME_INCOMING, FRAME_OUTGOING, FRAME_HEADER_LEN } = require('./frame-parser.js');
+const weather = require('./weather.js');
 
 // Load .env.local (check both __dirname and parent for native dev vs Docker)
 const fs = require('fs');
@@ -479,8 +480,11 @@ function sleep(ms) {
 // ---------------------------------------------------------------------------
 // Shutdown
 // ---------------------------------------------------------------------------
+let stopWeather = () => {};
+
 function shutdown() {
   log.info('Shutting down...');
+  stopWeather();
   if (serial && serial.isOpen) {
     serial.close();
   }
@@ -504,3 +508,10 @@ startHTTPServer();
 startWebSocketServer();
 startTCPServer();
 openSerial();
+
+stopWeather = weather.start({
+  enqueueCommand,
+  buildOutgoingFrame: FrameParser.buildOutgoingFrame,
+  isReady: () => startupComplete && serial && serial.isOpen,
+  log,
+});

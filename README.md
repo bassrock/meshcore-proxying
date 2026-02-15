@@ -21,6 +21,7 @@ A bridge server that connects a USB MeshCore companion device to multiple interf
 - **Web UI** — Proxies the official [app.meshcore.nz](https://app.meshcore.nz) Flutter app with an injected WebSerial polyfill. Click "Connect via Serial" and it routes through the bridge instead of requiring a local USB device. Access from any device on your network.
 - **Home Assistant** — Exposes a TCP companion protocol server on port 5000, compatible with [meshcore-ha](https://github.com/meshcore-dev/meshcore-ha). Point it at your bridge host and it works as if the radio were directly connected.
 - **LetsMesh Observer** — Works with [meshcore-packet-capture](https://github.com/agessaman/meshcore-packet-capture) which connects via TCP to publish packets to the LetsMesh MQTT broker. Your node appears on [analyzer.letsmesh.net](https://analyzer.letsmesh.net).
+- **Weather Station Broadcast** — Polls Home Assistant weather sensors and broadcasts compact weather reports as channel text messages over the mesh network. Configurable sensors, interval, and channel.
 - **Shared Serial** — All interfaces share a single serial connection with a command queue that serializes access. No port conflicts between the web UI, Home Assistant, and packet capture.
 
 ## Quick Start
@@ -69,6 +70,37 @@ Copy `env.local.example` to `env.local` and adjust:
 | `TCP_PORT` | `5000` | TCP companion protocol port |
 | `PUSH_BUFFER_SIZE` | `1000` | Max buffered push notifications for WebSocket replay |
 | `DEBUG` | _(unset)_ | Set to `1` for verbose logging |
+
+### Weather Station Broadcast
+
+Broadcasts Home Assistant weather sensor data as periodic channel text messages over MeshCore. Set `WEATHER_ENABLED=true` and configure your HA connection and sensor entity IDs.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WEATHER_ENABLED` | `false` | Set `true` to enable weather broadcasts |
+| `WEATHER_HA_URL` | _(required)_ | Home Assistant base URL (e.g. `http://192.168.1.100:8123`) |
+| `WEATHER_HA_TOKEN` | _(required)_ | Home Assistant long-lived access token |
+| `WEATHER_INTERVAL_MINUTES` | `15` | Poll + broadcast interval in minutes |
+| `WEATHER_CHANNEL_IDX` | `0` | MeshCore channel index to broadcast on |
+| `WEATHER_ENTITY_TEMPERATURE` | _(unset)_ | Entity ID for temperature |
+| `WEATHER_ENTITY_HUMIDITY` | _(unset)_ | Entity ID for humidity |
+| `WEATHER_ENTITY_WIND_SPEED` | _(unset)_ | Entity ID for wind speed |
+| `WEATHER_ENTITY_WIND_GUST` | _(unset)_ | Entity ID for wind gust |
+| `WEATHER_ENTITY_WIND_BEARING` | _(unset)_ | Entity ID for wind direction |
+| `WEATHER_ENTITY_PRESSURE` | _(unset)_ | Entity ID for barometric pressure |
+| `WEATHER_ENTITY_UV` | _(unset)_ | Entity ID for UV index |
+| `WEATHER_ENTITY_RAIN_RATE` | _(unset)_ | Entity ID for rain rate |
+| `WEATHER_ENTITY_RAIN_DAILY` | _(unset)_ | Entity ID for daily rain accumulation |
+| `WEATHER_ENTITY_SOLAR_RADIATION` | _(unset)_ | Entity ID for solar radiation |
+| `WEATHER_ENTITY_DEW_POINT` | _(unset)_ | Entity ID for dew point |
+
+Only configured entity IDs are fetched — partial data is fine. Units come from Home Assistant's `unit_of_measurement` attribute, so metric/imperial follows your HA config. Messages look like:
+
+```
+WX: 72.3°F 45% NW12G18mph 30.12inHg UV4 0.02in/h 0.45in
+```
+
+To create a long-lived access token in Home Assistant: Profile → Security → Long-Lived Access Tokens → Create Token.
 
 ### Packet Capture (meshcore-packet-capture)
 
