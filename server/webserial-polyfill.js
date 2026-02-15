@@ -276,6 +276,8 @@
 
     async requestPort(_options) {
       console.log(TAG, 'requestPort called — returning singleton port');
+      // Request notification permission while we have a user gesture context
+      requestNotificationPermission();
       return singletonPort;
     },
 
@@ -356,23 +358,51 @@
   });
 
   // -------------------------------------------------------------------------
-  // Service worker registration for push notifications
+  // Service worker + push notifications
   // -------------------------------------------------------------------------
-  async function registerPushNotifications() {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-      console.log(TAG, '[Push] Service worker or Push API not supported');
+  let swRegistration = null;
+  let pushPermissionRequested = false;
+
+  // Step 1: Register service worker on page load (no gesture needed)
+  async function registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) {
+      console.log(TAG, '[Push] Service workers not supported (requires HTTPS or localhost)');
       return;
     }
-
     try {
-      const reg = await navigator.serviceWorker.register('/__push-worker.js');
+      swRegistration = await navigator.serviceWorker.register('/__push-worker.js');
       console.log(TAG, '[Push] Service worker registered');
+    } catch (err) {
+      console.error(TAG, '[Push] Service worker registration failed:', err);
+    }
+  }
 
-      // Request notification permission
-      const permission = await Notification.requestPermission();
-      console.log(TAG, '[Push] Notification permission:', permission);
-      if (permission !== 'granted') return;
+  // Step 2: Request permission — called from requestPort() (user gesture)
+  function requestNotificationPermission() {
+    if (pushPermissionRequested) return;
+    if (!('Notification' in window) || !('PushManager' in window)) return;
+    if (Notification.permission === 'granted') {
+      // Already granted from a previous visit — just subscribe
+      subscribeToPush();
+      return;
+    }
+    if (Notification.permission === 'denied') return;
 
+    pushPermissionRequested = true;
+    console.log(TAG, '[Push] Requesting notification permission…');
+    Notification.requestPermission().then((perm) => {
+      console.log(TAG, '[Push] Notification permission:', perm);
+      if (perm === 'granted') subscribeToPush();
+    });
+  }
+
+  // Step 3: Subscribe to push and send subscription to server
+  async function subscribeToPush() {
+    if (!swRegistration) {
+      console.warn(TAG, '[Push] No service worker registration — skipping push subscribe');
+      return;
+    }
+    try {
       // Get VAPID public key from server
       const resp = await fetch('/__push/vapid-key');
       if (!resp.ok) {
@@ -380,18 +410,14 @@
         return;
       }
       const { publicKey } = await resp.json();
-
-      // Convert base64url VAPID key to Uint8Array
       const vapidKey = urlBase64ToUint8Array(publicKey);
 
-      // Subscribe to push
-      const subscription = await reg.pushManager.subscribe({
+      const subscription = await swRegistration.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: vapidKey,
       });
       console.log(TAG, '[Push] Push subscription created');
 
-      // Send subscription to server
       await fetch('/__push/subscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -399,7 +425,7 @@
       });
       console.log(TAG, '[Push] Subscription sent to server');
     } catch (err) {
-      console.error(TAG, '[Push] Registration failed:', err);
+      console.error(TAG, '[Push] Push subscription failed:', err);
     }
   }
 
@@ -412,9 +438,8 @@
     return arr;
   }
 
-  // Kick off push registration after page load
+  // Register SW early, push subscription happens after user clicks Connect
   window.addEventListener('load', () => {
-    // Small delay so it doesn't block initial rendering
-    setTimeout(registerPushNotifications, 3000);
+    setTimeout(registerServiceWorker, 1000);
   });
 })();
