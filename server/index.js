@@ -76,13 +76,50 @@ let wsClients = new Set();
 let tcpClients = new Set();
 
 // Push notification buffer for replay on WebSocket connect
-const pushBuffer = []; // Array of { frame: Buffer, timestamp: number }
+// Persisted to disk so history survives server restarts.
+const PUSH_HISTORY_PATH = path.resolve(__dirname, '.push-history.json');
+const pushBuffer = loadPushHistory(); // Array of { frame: Buffer, timestamp: number }
+let pushHistoryDirty = false;
+let pushHistoryTimer = null;
+
+function loadPushHistory() {
+  try {
+    if (fs.existsSync(PUSH_HISTORY_PATH)) {
+      const entries = JSON.parse(fs.readFileSync(PUSH_HISTORY_PATH, 'utf8'));
+      return entries.map(e => ({ frame: Buffer.from(e.frame, 'base64'), timestamp: e.timestamp }));
+    }
+  } catch (err) {
+    // Corrupted file — start fresh
+  }
+  return [];
+}
+
+function savePushHistory() {
+  pushHistoryDirty = false;
+  try {
+    const entries = pushBuffer.map(e => ({ frame: e.frame.toString('base64'), timestamp: e.timestamp }));
+    fs.writeFileSync(PUSH_HISTORY_PATH, JSON.stringify(entries));
+  } catch (err) {
+    // Non-fatal — will retry on next buffer change
+  }
+}
+
+function schedulePushHistorySave() {
+  pushHistoryDirty = true;
+  if (!pushHistoryTimer) {
+    pushHistoryTimer = setTimeout(() => {
+      pushHistoryTimer = null;
+      if (pushHistoryDirty) savePushHistory();
+    }, 5000);
+  }
+}
 
 function bufferPushNotification(rawFrame) {
   pushBuffer.push({ frame: rawFrame, timestamp: Date.now() });
   while (pushBuffer.length > PUSH_BUFFER_SIZE) {
     pushBuffer.shift();
   }
+  schedulePushHistorySave();
 }
 
 // Device info retrieved at startup
@@ -153,9 +190,6 @@ function resetState() {
 
   // Drop stale queued commands
   commandQueue.length = 0;
-
-  // Clear stale push notifications from previous device session
-  pushBuffer.length = 0;
 }
 
 function openSerial() {
@@ -588,6 +622,7 @@ let stopWeather = () => {};
 function shutdown() {
   log.info('Shutting down...');
   stopWeather();
+  if (pushHistoryDirty) savePushHistory();
   if (serial && serial.isOpen) {
     serial.close();
   }
@@ -605,7 +640,7 @@ log.info(`Serial: ${SERIAL_PORT} @ ${SERIAL_BAUD}`);
 log.info(`HTTP:   :${HTTP_PORT}`);
 log.info(`WS:     :${WS_PORT}`);
 log.info(`TCP:    :${TCP_PORT}`);
-log.info(`Push buffer: ${PUSH_BUFFER_SIZE} entries`);
+log.info(`Push buffer: ${PUSH_BUFFER_SIZE} max, ${pushBuffer.length} loaded from disk`);
 log.info(`Cmd timeout: ${COMMAND_TIMEOUT_MS}ms`);
 log.info(`VAPID public key: ${vapidKeys.publicKey}`);
 

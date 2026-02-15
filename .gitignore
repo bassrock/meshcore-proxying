@@ -3,6 +3,7 @@ env.local
 .env.local
 .env
 .vapid-keys.json
+.push-history.json
 server/public/
 server/node_modules/
 *.log
