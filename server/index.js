@@ -69,6 +69,45 @@ let startupComplete = false;
 let pendingResolve = null;
 
 // ---------------------------------------------------------------------------
+// Command Queue — serializes access to the serial port
+// ---------------------------------------------------------------------------
+// The companion protocol has no request IDs, so we must send one command at a
+// time and wait for the response before sending the next. Push notifications
+// (code >= 0x80) are always broadcast to all clients regardless.
+const commandQueue = [];
+let currentCommand = null; // { data, source, timer }
+
+function enqueueCommand(data, source) {
+  commandQueue.push({ data, source });
+  drainQueue();
+}
+
+function drainQueue() {
+  if (!startupComplete) return;  // don't send client commands during startup
+  if (currentCommand) return;    // already processing
+  if (commandQueue.length === 0) return;
+  if (!serial || !serial.isOpen) return;
+
+  currentCommand = commandQueue.shift();
+  currentCommand.timer = setTimeout(() => {
+    // Response timeout — release the lock so the queue keeps moving
+    log.debug('[QUEUE] Command timed out, moving on');
+    currentCommand = null;
+    drainQueue();
+  }, 5000);
+
+  serial.write(currentCommand.data);
+}
+
+function resolveCurrentCommand() {
+  if (!currentCommand) return;
+  clearTimeout(currentCommand.timer);
+  currentCommand = null;
+  // Process next command on next tick to avoid re-entrancy
+  setImmediate(drainQueue);
+}
+
+// ---------------------------------------------------------------------------
 // Serial Port
 // ---------------------------------------------------------------------------
 function openSerial() {
@@ -173,6 +212,10 @@ async function startDeviceQuery() {
   } else if (mqttConfig.enabled) {
     log.warn('[MQTT] Cannot start - missing device keys');
   }
+
+  // Drain any commands that were queued while startup was in progress
+  log.info(`[STARTUP] Complete — draining ${commandQueue.length} queued client commands`);
+  drainQueue();
 }
 
 function sendCommandAndWait(commandPayload, expectedResponseCode, timeoutMs) {
@@ -209,42 +252,58 @@ function handleIncomingFrame(frame) {
   if (!payload || payload.length === 0) return;
 
   const responseCode = payload[0];
+  const isPush = FrameParser.isPushNotification(payload);
 
   // During startup, check for pending command responses
   if (pendingResolve && responseCode === pendingResolve.expectedResponseCode) {
     pendingResolve.resolve(payload);
-    // Don't forward startup responses to WebSocket clients
     return;
   }
 
-  // Build the raw frame bytes to forward to WebSocket clients
+  // Build the raw frame bytes
   const rawFrame = Buffer.alloc(FRAME_HEADER_LEN + payload.length);
   rawFrame[0] = FRAME_INCOMING;
   rawFrame[1] = payload.length & 0xff;
   rawFrame[2] = (payload.length >> 8) & 0xff;
   payload.copy(rawFrame, FRAME_HEADER_LEN);
 
-  // Forward to all connected WebSocket clients
-  for (const ws of wsClients) {
-    if (ws.readyState === 1) { // OPEN
-      ws.send(rawFrame);
-    }
-  }
+  if (isPush) {
+    // Push notifications: broadcast to ALL clients
+    broadcastToAll(rawFrame);
 
-  // Forward to all connected TCP clients
-  for (const sock of tcpClients) {
-    if (!sock.destroyed) {
-      sock.write(rawFrame);
-    }
-  }
-
-  // Inspect push notifications for MQTT publishing
-  if (FrameParser.isPushNotification(payload)) {
+    // Publish to MQTT
     const pushData = FrameParser.parsePushNotification(payload);
     if (pushData) {
       log.debug(`[PUSH] ${pushData.type}`, pushData);
       mqttPublisher.publishPacket(pushData);
     }
+  } else {
+    // Command response: send only to the client that sent the command
+    if (currentCommand && currentCommand.source) {
+      sendToClient(currentCommand.source, rawFrame);
+    } else {
+      // No tracked source (e.g. startup) — broadcast as fallback
+      broadcastToAll(rawFrame);
+    }
+    resolveCurrentCommand();
+  }
+}
+
+function broadcastToAll(rawFrame) {
+  for (const ws of wsClients) {
+    if (ws.readyState === 1) ws.send(rawFrame);
+  }
+  for (const sock of tcpClients) {
+    if (!sock.destroyed) sock.write(rawFrame);
+  }
+}
+
+function sendToClient(source, rawFrame) {
+  // source is either a WebSocket or a TCP socket
+  if (source._isWebSocket) {
+    if (source.readyState === 1) source.send(rawFrame);
+  } else {
+    if (!source.destroyed) source.write(rawFrame);
   }
 }
 
@@ -262,19 +321,11 @@ function startWebSocketServer() {
     const addr = req.socket.remoteAddress;
     log.info(`[WS] Client connected from ${addr}`);
 
-    // Enforce single client (optional — warn but still allow)
-    if (wsClients.size > 0) {
-      log.warn('[WS] Multiple clients connected — command interleaving may occur');
-    }
-
+    ws._isWebSocket = true; // Tag for sendToClient
     wsClients.add(ws);
 
     ws.on('message', (data) => {
-      // Forward binary data from browser to serial device
-      if (serial && serial.isOpen) {
-        // Data from browser is already framed with the serial protocol header
-        serial.write(Buffer.from(data));
-      }
+      enqueueCommand(Buffer.from(data), ws);
     });
 
     ws.on('close', () => {
@@ -311,11 +362,15 @@ function startTCPServer() {
 
     tcpClients.add(socket);
 
+    // TCP data arrives as a stream — may contain partial or multiple frames.
+    // Buffer and parse into individual frames before queuing.
+    const tcpParser = new FrameParser();
     socket.on('data', (data) => {
-      // Forward binary data from TCP client to serial device
-      // Data is already framed with 0x3C headers by the client
-      if (serial && serial.isOpen) {
-        serial.write(data);
+      const frames = tcpParser.feed(data);
+      for (const frame of frames) {
+        // Re-frame and enqueue
+        const raw = FrameParser.buildFrame(frame.type, frame.payload);
+        enqueueCommand(raw, socket);
       }
     });
 
