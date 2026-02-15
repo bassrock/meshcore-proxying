@@ -9,6 +9,15 @@ const { FrameParser, CommandCodes, ResponseCodes, PushCodes, FRAME_INCOMING, FRA
 const weather = require('./weather.js');
 const webpush = require('web-push');
 
+// Response codes that are part of a multi-frame streaming sequence.
+// Any code NOT in this set is treated as terminal (releases the queue lock).
+const STREAMING_RESPONSE_CODES = new Set([
+  ResponseCodes.ContactsStart,   // 2
+  ResponseCodes.Contact,         // 3
+  ResponseCodes.ContactMsgRecv,  // 7
+  ResponseCodes.ChannelMsgRecv,  // 8
+]);
+
 // Load .env.local (check both __dirname and parent for native dev vs Docker)
 const fs = require('fs');
 const envLocal = [
@@ -167,6 +176,16 @@ function resolveCurrentCommand() {
   currentCommand = null;
   // Process next command on next tick to avoid re-entrancy
   setImmediate(drainQueue);
+}
+
+function resetCommandTimeout() {
+  if (!currentCommand) return;
+  clearTimeout(currentCommand.timer);
+  currentCommand.timer = setTimeout(() => {
+    log.debug('[QUEUE] Command timed out, moving on');
+    currentCommand = null;
+    drainQueue();
+  }, COMMAND_TIMEOUT_MS);
 }
 
 // ---------------------------------------------------------------------------
@@ -341,7 +360,11 @@ function handleIncomingFrame(frame) {
       // No tracked source (e.g. startup) — broadcast as fallback
       broadcastToAll(rawFrame);
     }
-    resolveCurrentCommand();
+    if (STREAMING_RESPONSE_CODES.has(responseCode)) {
+      resetCommandTimeout();
+    } else {
+      resolveCurrentCommand();
+    }
   }
 }
 
