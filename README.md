@@ -68,6 +68,8 @@ Copy `env.local.example` to `env.local` and adjust:
 | `MQTT_PORT` | `443` | MQTT broker port |
 | `MQTT_TRANSPORT` | `websockets` | MQTT transport (`websockets` or `tcp`) |
 | `MQTT_USE_TLS` | `true` | Use TLS for MQTT |
+| `OWNER` | _(unset)_ | Your 64-char hex public key from your LetsMesh/forum profile |
+| `EMAIL` | _(unset)_ | Email associated with your LetsMesh/forum account |
 | `HTTP_PORT` | `8080` | Web UI port |
 | `WS_PORT` | `3000` | WebSocket bridge port |
 | `TCP_PORT` | `5000` | TCP companion protocol port |
@@ -109,6 +111,8 @@ The server authenticates to the LetsMesh MQTT broker using JWT tokens signed wit
 - **Username:** `v1_{PUBLIC_KEY}`
 - **Password:** Ed25519-signed JWT
 - **Topics:** `meshcore/{IATA}/{PUBLIC_KEY}/packets` and `meshcore/{IATA}/{PUBLIC_KEY}/status`
+
+To associate the observer with your LetsMesh forum account, set `OWNER` to your 64-character hex public key (from your forum profile) and `EMAIL` to your account email. These are included as JWT claims in the auth token.
 
 ## License
 
