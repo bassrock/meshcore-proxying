@@ -110,6 +110,26 @@ function resolveCurrentCommand() {
 // ---------------------------------------------------------------------------
 // Serial Port
 // ---------------------------------------------------------------------------
+function resetState() {
+  serial = null;
+  startupComplete = false;
+  frameParser.buffer = [];
+
+  // Cancel any in-flight command
+  if (currentCommand) {
+    clearTimeout(currentCommand.timer);
+    currentCommand = null;
+  }
+
+  // Clear pending startup resolve
+  if (pendingResolve) {
+    pendingResolve = null;
+  }
+
+  // Drop stale queued commands
+  commandQueue.length = 0;
+}
+
 function openSerial() {
   log.info(`[SERIAL] Opening ${SERIAL_PORT} at ${SERIAL_BAUD} baud`);
 
@@ -125,7 +145,7 @@ function openSerial() {
 
   serial.on('close', () => {
     log.warn('[SERIAL] Port closed, reconnecting in 5s...');
-    serial = null;
+    resetState();
     setTimeout(openSerial, 5000);
   });
 
