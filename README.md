@@ -67,6 +67,7 @@ Copy `env.local.example` to `env.local` and adjust:
 | `HTTP_PORT` | `8080` | Web UI port |
 | `WS_PORT` | `3000` | WebSocket bridge port |
 | `TCP_PORT` | `5000` | TCP companion protocol port |
+| `PUSH_BUFFER_SIZE` | `1000` | Max buffered push notifications for WebSocket replay |
 | `DEBUG` | _(unset)_ | Set to `1` for verbose logging |
 
 ### Packet Capture (meshcore-packet-capture)

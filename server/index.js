@@ -27,6 +27,7 @@ const SERIAL_BAUD = parseInt(process.env.SERIAL_BAUD, 10) || 115200;
 const HTTP_PORT = parseInt(process.env.HTTP_PORT, 10) || 8080;
 const WS_PORT = parseInt(process.env.WS_PORT, 10) || 3000;
 const TCP_PORT = parseInt(process.env.TCP_PORT, 10) || 5000;
+const PUSH_BUFFER_SIZE = parseInt(process.env.PUSH_BUFFER_SIZE, 10) || 1000;
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -47,6 +48,16 @@ let serial = null;
 const frameParser = new FrameParser();
 let wsClients = new Set();
 let tcpClients = new Set();
+
+// Push notification buffer for replay on WebSocket connect
+const pushBuffer = []; // Array of { frame: Buffer, timestamp: number }
+
+function bufferPushNotification(rawFrame) {
+  pushBuffer.push({ frame: rawFrame, timestamp: Date.now() });
+  while (pushBuffer.length > PUSH_BUFFER_SIZE) {
+    pushBuffer.shift();
+  }
+}
 
 // Device info retrieved at startup
 let deviceName = null;
@@ -115,6 +126,9 @@ function resetState() {
 
   // Drop stale queued commands
   commandQueue.length = 0;
+
+  // Clear stale push notifications from previous device session
+  pushBuffer.length = 0;
 }
 
 function openSerial() {
@@ -249,9 +263,10 @@ function handleIncomingFrame(frame) {
   payload.copy(rawFrame, FRAME_HEADER_LEN);
 
   if (isPush) {
-    // Push notifications: broadcast to ALL clients
+    // Push notifications: buffer and broadcast to ALL clients
+    bufferPushNotification(rawFrame);
     broadcastToAll(rawFrame);
-    log.debug(`[PUSH] code=0x${responseCode.toString(16)}`);
+    log.debug(`[PUSH] code=0x${responseCode.toString(16)} (buffer: ${pushBuffer.length}/${PUSH_BUFFER_SIZE})`);
   } else {
     // Command response: send only to the client that sent the command
     if (currentCommand && currentCommand.source) {
@@ -298,6 +313,14 @@ function startWebSocketServer() {
 
     ws._isWebSocket = true; // Tag for sendToClient
     wsClients.add(ws);
+
+    // Replay buffered push notifications to the new client
+    if (pushBuffer.length > 0) {
+      log.info(`[WS] Replaying ${pushBuffer.length} buffered push notifications`);
+      for (const entry of pushBuffer) {
+        if (ws.readyState === 1) ws.send(entry.frame);
+      }
+    }
 
     ws.on('message', (data) => {
       enqueueCommand(Buffer.from(data), ws);
@@ -475,6 +498,7 @@ log.info(`Serial: ${SERIAL_PORT} @ ${SERIAL_BAUD}`);
 log.info(`HTTP:   :${HTTP_PORT}`);
 log.info(`WS:     :${WS_PORT}`);
 log.info(`TCP:    :${TCP_PORT}`);
+log.info(`Push buffer: ${PUSH_BUFFER_SIZE} entries`);
 
 startHTTPServer();
 startWebSocketServer();
