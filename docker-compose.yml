@@ -1,0 +1,17 @@
+services:
+  meshcore:
+    image: ghcr.io/bassrock/meshcore-proxying:latest
+    # Or build locally:
+    # build: .
+    container_name: meshcore-station
+    restart: unless-stopped
+    ports:
+      - "8080:8080"   # Web UI (proxied app.meshcore.nz)
+      - "3000:3000"   # WebSocket (browser bridge)
+      - "5000:5000"   # TCP companion protocol (meshcore-ha)
+    devices:
+      - "/dev/ttyACM0:/dev/ttyACM0"
+    volumes:
+      - ./env.local:/app/.env.local:ro
+    environment:
+      - TZ=America/Los_Angeles

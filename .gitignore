@@ -1,0 +1,9 @@
+node_modules/
+env.local
+.env.local
+.env
+server/public/
+server/node_modules/
+*.log
+.DS_Store
+meshcore-decoder/

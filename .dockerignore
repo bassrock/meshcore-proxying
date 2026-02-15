@@ -1,0 +1,12 @@
+node_modules/
+server/node_modules/
+server/public/
+.git/
+.github/
+*.md
+env.local
+.env.local
+.env
+.DS_Store
+meshcore-decoder/
+patches/
