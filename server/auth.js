@@ -23,9 +23,10 @@ try {
  * @param {string} privateKeyHex - 64-byte private key in hex (128 chars)
  * @param {string} audience - Token audience (broker hostname)
  * @param {number} expirySeconds - Token expiry in seconds (default 3600)
+ * @param {Object} [extraClaims] - Additional JWT claims (owner, email, client, etc.)
  * @returns {Promise<string>} JWT token string
  */
-async function generateToken(publicKeyHex, privateKeyHex, audience, expirySeconds = 3600) {
+async function generateToken(publicKeyHex, privateKeyHex, audience, expirySeconds = 3600, extraClaims = {}) {
   // Use library if available
   if (createAuthTokenLib) {
     const now = Math.floor(Date.now() / 1000);
@@ -33,6 +34,7 @@ async function generateToken(publicKeyHex, privateKeyHex, audience, expirySecond
       publicKey: publicKeyHex.toUpperCase(),
       iat: now,
       exp: now + expirySeconds,
+      ...extraClaims,
     };
     if (audience) {
       payload.aud = audience;
@@ -41,15 +43,17 @@ async function generateToken(publicKeyHex, privateKeyHex, audience, expirySecond
   }
 
   // Fall back to CLI
-  return generateTokenViaCLI(publicKeyHex, privateKeyHex, audience, expirySeconds);
+  return generateTokenViaCLI(publicKeyHex, privateKeyHex, audience, expirySeconds, extraClaims);
 }
 
-function generateTokenViaCLI(publicKeyHex, privateKeyHex, audience, expirySeconds) {
+function generateTokenViaCLI(publicKeyHex, privateKeyHex, audience, expirySeconds, extraClaims = {}) {
   return new Promise((resolve, reject) => {
     const args = ['auth-token', publicKeyHex, privateKeyHex, '-e', String(expirySeconds)];
 
-    if (audience) {
-      args.push('-c', JSON.stringify({ aud: audience }));
+    const claims = { ...extraClaims };
+    if (audience) claims.aud = audience;
+    if (Object.keys(claims).length > 0) {
+      args.push('-c', JSON.stringify(claims));
     }
 
     execFile('meshcore-decoder', args, { timeout: 10000 }, (err, stdout, stderr) => {

@@ -36,6 +36,8 @@ const mqttConfig = {
   transport: process.env.MQTT_TRANSPORT || 'websockets',
   useTls: (process.env.MQTT_USE_TLS || 'true').toLowerCase() === 'true',
   iata: process.env.IATA || 'XXX',
+  owner: process.env.OWNER || '',
+  email: process.env.EMAIL || '',
 };
 
 // ---------------------------------------------------------------------------

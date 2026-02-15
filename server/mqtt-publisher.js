@@ -30,9 +30,14 @@ class MQTTPublisher {
     const { server, port, transport, useTls } = this.config;
     const audience = server;
 
+    // Build extra JWT claims for account association
+    const extraClaims = { client: 'meshcore-proxying/1.0.0' };
+    if (this.config.owner) extraClaims.owner = this.config.owner;
+    if (this.config.email) extraClaims.email = this.config.email.toLowerCase();
+
     let password;
     try {
-      password = await generateToken(this.publicKey, this.privateKey, audience, 3600);
+      password = await generateToken(this.publicKey, this.privateKey, audience, 3600, extraClaims);
       this.log.info('[MQTT] Auth token generated');
     } catch (err) {
       this.log.error(`[MQTT] Failed to generate auth token: ${err.message}`);
